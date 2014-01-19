@@ -70,6 +70,9 @@
         can use this to confuse other apps that download
         files.</string>
 
+    <!-- Transfer speed for current download/s. -->
+    <string name="download_speed"><xliff:g id="duration">%s</xliff:g>/s</string>
+
     <!-- The label for the permission to download files to the download cache
     that can't be automatically deleted by the download manager to free up
     space [CHAR LIMIT=50] -->

@@ -41,6 +41,7 @@ import android.provider.Downloads;
 import android.service.notification.StatusBarNotification;
 import android.text.TextUtils;
 import android.text.format.DateUtils;
+import android.text.format.Formatter;
 import android.util.ArrayMap;
 import android.util.IntArray;
 import android.util.Log;
@@ -292,9 +293,9 @@ public class DownloadNotifier {
             }
 
             // Calculate and show progress
-            String remainingLongText = null;
-            String remainingShortText = null;
+            String remainingText = null;
             String percentText = null;
+            String speedText = null;
             if (type == TYPE_ACTIVE) {
                 long current = 0;
                 long total = 0;
@@ -320,11 +321,11 @@ public class DownloadNotifier {
                             NumberFormat.getPercentInstance().format((double) current / total);
 
                     if (speed > 0) {
+                        speedText = res.getString(R.string.download_speed,
+                                Formatter.formatFileSize(mContext, speed));
                         final long remainingMillis = ((total - current) * 1000) / speed;
-                        remainingLongText = getRemainingText(res, remainingMillis,
+                        remainingText = getRemainingText(res, remainingMillis,
                             DateUtils.LENGTH_LONG);
-                        remainingShortText = getRemainingText(res, remainingMillis,
-                            DateUtils.LENGTH_SHORTEST);
                     }
 
                     final int percent = (int) ((current * 100) / total);
@@ -332,6 +333,38 @@ public class DownloadNotifier {
                 } else {
                     builder.setProgress(100, 0, true);
                 }
+            }
+
+            int textCombinations = 0;
+            if (!TextUtils.isEmpty(percentText))   { textCombinations += 1; }
+            if (!TextUtils.isEmpty(speedText))     { textCombinations += 2; }
+            if (!TextUtils.isEmpty(remainingText)) { textCombinations += 4; }
+            String downloadSubText;
+            switch (textCombinations) {
+                case 1:
+                    downloadSubText = percentText;
+                    break;
+                case 2:
+                    downloadSubText = speedText;
+                    break;
+                case 3:
+                    downloadSubText = speedText + ", " + percentText;
+                    break;
+                case 4:
+                    downloadSubText = remainingText;
+                    break;
+                case 5:
+                    downloadSubText = remainingText + ", " + percentText;
+                    break;
+                case 6:
+                    downloadSubText = speedText + ", " + remainingText;
+                    break;
+                case 7:
+                    downloadSubText = speedText + ", " + remainingText + ", " + percentText;
+                    break;
+                default:
+                    downloadSubText = "";
+                    break;
             }
 
             // Build titles and description
@@ -344,11 +377,8 @@ public class DownloadNotifier {
                     final String description = cursor.getString(UpdateQuery.DESCRIPTION);
                     if (!TextUtils.isEmpty(description)) {
                         builder.setContentText(description);
-                    } else {
-                        builder.setContentText(remainingLongText);
                     }
-                    builder.setContentInfo(percentText);
-
+                    builder.setSubText(downloadSubText);
                 } else if (type == TYPE_WAITING) {
                     builder.setContentText(
                             res.getString(R.string.notification_need_wifi_for_size));
@@ -376,10 +406,7 @@ public class DownloadNotifier {
                 if (type == TYPE_ACTIVE) {
                     builder.setContentTitle(res.getQuantityString(
                             R.plurals.notif_summary_active, cluster.size(), cluster.size()));
-                    builder.setContentText(remainingLongText);
-                    builder.setContentInfo(percentText);
-                    inboxStyle.setSummaryText(remainingShortText);
-
+                    builder.setSubText(downloadSubText);
                 } else if (type == TYPE_WAITING) {
                     builder.setContentTitle(res.getQuantityString(
                             R.plurals.notif_summary_waiting, cluster.size(), cluster.size()));
