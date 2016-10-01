@@ -19,6 +19,7 @@ package com.android.providers.downloads;
 import static android.app.DownloadManager.Request.VISIBILITY_VISIBLE;
 import static android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED;
 import static android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_ONLY_COMPLETION;
+import static android.provider.Downloads.Impl.STATUS_PAUSED_MANUAL;
 import static android.provider.Downloads.Impl.STATUS_QUEUED_FOR_WIFI;
 import static android.provider.Downloads.Impl.STATUS_RUNNING;
 
@@ -49,6 +50,7 @@ import android.util.LongSparseLongArray;
 
 import com.android.internal.util.ArrayUtils;
 
+import java.lang.StringBuilder;
 import java.text.NumberFormat;
 
 import javax.annotation.concurrent.GuardedBy;
@@ -178,6 +180,8 @@ public class DownloadNotifier {
 
     private void updateWithLocked(@NonNull Cursor cursor) {
         final Resources res = mContext.getResources();
+        int notifisPaused = 0;
+        boolean isClusterPaused = false;
 
         // Cluster downloads together
         final ArrayMap<String, IntArray> clustered = new ArrayMap<>();
@@ -227,6 +231,36 @@ public class DownloadNotifier {
             builder.setWhen(firstShown);
             builder.setOnlyAlertOnce(true);
 
+            /**
+             * If *all* current downloads in the cluster are manually paused,
+             * display the appropriate notification icon and content.
+             *
+             * Also keep track of the number of paused downloads so as to
+             * display the current number of downloading files correctly.
+             */
+            for (int j = 0; j < cluster.size(); j++) {
+                cursor.moveToPosition(cluster.get(j));
+                int status = cursor.getInt(UpdateQuery.STATUS);
+                if (status == Downloads.Impl.STATUS_PAUSED_MANUAL) {
+                    notifisPaused++;
+                }
+            }
+
+            isClusterPaused = notifisPaused == cluster.size();
+
+            // Show relevant icon
+            if (type == TYPE_ACTIVE) {
+                if (isClusterPaused) {
+                    builder.setSmallIcon(R.drawable.download_pause);
+                } else {
+                    builder.setSmallIcon(android.R.drawable.stat_sys_download);
+                }
+            } else if (type == TYPE_WAITING) {
+                builder.setSmallIcon(android.R.drawable.stat_sys_warning);
+            } else if (type == TYPE_COMPLETE) {
+                builder.setSmallIcon(android.R.drawable.stat_sys_download_done);
+            }
+
             // Build action intents
             if (type == TYPE_ACTIVE || type == TYPE_WAITING) {
                 final long[] downloadIds = getDownloadIds(cursor, cluster);
@@ -260,6 +294,33 @@ public class DownloadNotifier {
                             0, cancelIntent,
                             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
 
+                if (isClusterPaused) {
+                    // Add a Resume action
+                    final Intent resumeIntent = new Intent(Constants.ACTION_RESUME_QUEUE,
+                            uri, mContext, DownloadReceiver.class);
+                    resumeIntent.putExtra(DownloadManager.EXTRA_NOTIFICATION_CLICK_DOWNLOAD_IDS,
+                            downloadIds);
+
+                    builder.addAction(
+                            com.android.internal.R.drawable.ic_media_play,
+                            res.getString(R.string.button_resume_download),
+                            PendingIntent.getBroadcast(mContext,
+                                    0, resumeIntent,
+                                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+                } else {
+                    // Add a Pause action
+                    final Intent pauseIntent = new Intent(Constants.ACTION_PAUSE,
+                            uri, mContext, DownloadReceiver.class);
+                    pauseIntent.putExtra(DownloadManager.EXTRA_NOTIFICATION_CLICK_DOWNLOAD_IDS,
+                            downloadIds);
+
+                    builder.addAction(
+                            com.android.internal.R.drawable.ic_media_pause,
+                            res.getString(R.string.button_pause_download),
+                            PendingIntent.getBroadcast(mContext,
+                                    0, pauseIntent,
+                                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+                }
             } else if (type == TYPE_COMPLETE) {
                 cursor.moveToPosition(cluster.get(0));
                 final long id = cursor.getLong(UpdateQuery._ID);
@@ -374,11 +435,15 @@ public class DownloadNotifier {
                 builder.setContentTitle(getDownloadTitle(res, cursor));
 
                 if (type == TYPE_ACTIVE) {
-                    final String description = cursor.getString(UpdateQuery.DESCRIPTION);
-                    if (!TextUtils.isEmpty(description)) {
-                        builder.setContentText(description);
+                    if (isClusterPaused) {
+                        builder.setContentText(res.getText(R.string.download_paused));
+                    } else {
+                        final String description = cursor.getString(UpdateQuery.DESCRIPTION);
+                        if (!TextUtils.isEmpty(description)) {
+                            builder.setContentText(description);
+                        }
+                        builder.setSubText(downloadSubText);
                     }
-                    builder.setSubText(downloadSubText);
                 } else if (type == TYPE_WAITING) {
                     builder.setContentText(
                             res.getString(R.string.notification_need_wifi_for_size));
@@ -404,9 +469,24 @@ public class DownloadNotifier {
                 }
 
                 if (type == TYPE_ACTIVE) {
-                    builder.setContentTitle(res.getQuantityString(
-                            R.plurals.notif_summary_active, cluster.size(), cluster.size()));
-                    builder.setSubText(downloadSubText);
+                    if (isClusterPaused) {
+                        builder.setContentTitle(res.getString(
+                                R.string.download_paused));
+                    } else if (notifisPaused > 0) {
+                        StringBuilder sb = new StringBuilder(res.getQuantityString(
+                                R.plurals.notif_summary_active,
+                                cluster.size() - notifisPaused, cluster.size()));
+                        sb.append(", ");
+                        sb.append(res.getString(
+                                R.string.notif_summary_paused,
+                                notifisPaused));
+                        builder.setContentTitle(sb.toString());
+                    } else {
+                        builder.setContentTitle(res.getQuantityString(
+                                R.plurals.notif_summary_active,
+                                cluster.size(), cluster.size()));
+                        builder.setSubText(downloadSubText);
+                    }
                 } else if (type == TYPE_WAITING) {
                     builder.setContentTitle(res.getQuantityString(
                             R.plurals.notif_summary_waiting, cluster.size(), cluster.size()));
@@ -505,7 +585,7 @@ public class DownloadNotifier {
     }
 
     private static boolean isActiveAndVisible(int status, int visibility) {
-        return status == STATUS_RUNNING &&
+        return (status == STATUS_RUNNING || status == STATUS_PAUSED_MANUAL) &&
                 (visibility == VISIBILITY_VISIBLE
                 || visibility == VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
     }

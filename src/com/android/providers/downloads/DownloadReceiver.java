@@ -67,6 +67,8 @@ public class DownloadReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(final Context context, final Intent intent) {
+        DownloadManager downloadManager =
+                (DownloadManager)context.getSystemService(Context.DOWNLOAD_SERVICE);
         final String action = intent.getAction();
         if (Intent.ACTION_BOOT_COMPLETED.equals(action)
                 || Intent.ACTION_MEDIA_MOUNTED.equals(action)) {
@@ -102,15 +104,31 @@ public class DownloadReceiver extends BroadcastReceiver {
         } else if (Constants.ACTION_CANCEL.equals(action)) {
             long[] downloadIds = intent.getLongArrayExtra(
                     DownloadReceiver.EXTRA_CANCELED_DOWNLOAD_IDS);
-            DownloadManager manager = (DownloadManager) context.getSystemService(
-                    Context.DOWNLOAD_SERVICE);
-            manager.remove(downloadIds);
+            downloadManager.remove(downloadIds);
 
             String notifTag = intent.getStringExtra(
                     DownloadReceiver.EXTRA_CANCELED_DOWNLOAD_NOTIFICATION_TAG);
             NotificationManager notifManager = (NotificationManager) context.getSystemService(
                     Context.NOTIFICATION_SERVICE);
             notifManager.cancel(notifTag, 0);
+        } else if (Constants.ACTION_PAUSE.equals(action)) {
+            long[] downloadIds = intent.getLongArrayExtra(
+                    DownloadManager.EXTRA_NOTIFICATION_CLICK_DOWNLOAD_IDS);
+            for (long id : downloadIds) {
+                downloadManager.pauseDownload(id);
+            }
+        } else if (Constants.ACTION_RESUME_QUEUE.equals(action)) {
+            long[] downloadIds = intent.getLongArrayExtra(
+                    DownloadManager.EXTRA_NOTIFICATION_CLICK_DOWNLOAD_IDS);
+            for (long id : downloadIds) {
+                downloadManager.resumeDownload(id);
+                Helpers.scheduleJob(context,
+                        DownloadInfo.queryDownloadInfo(context, id));
+            }
+        } else if (Constants.ACTION_RESUME.equals(action)) {
+            long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+            Helpers.scheduleJob(context,
+                    DownloadInfo.queryDownloadInfo(context, id));
         }
     }
 
